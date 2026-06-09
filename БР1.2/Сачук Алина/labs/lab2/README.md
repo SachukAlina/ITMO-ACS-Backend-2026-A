@@ -4,11 +4,11 @@
 
 ## Сервисы
 
-- `api-gateway` — порт `8080`, единая точка входа `/api/v1`.
-- `auth-service` — порт `8081`, регистрация, вход, профиль, проверка Bearer-токена.
-- `recipe-service` — порт `8082`, рецепты, список, фильтрация, карточка, CRUD.
-- `social-service` — порт `8083`, комментарии, лайки, сохранённые рецепты, подписки.
-- `rabbitmq` — порты `5672` и `15672`, очередь `recipe-events`.
+- `api-gateway` — внешний порт `8080`, единая точка входа `/api/v1`.
+- `auth-service` — внутренний порт `8081`, регистрация, вход, профиль, проверка Bearer-токена.
+- `recipe-service` — внутренний порт `8082`, рецепты, список, фильтрация, карточка, CRUD.
+- `social-service` — внутренний порт `8083`, комментарии, лайки, сохранённые рецепты, подписки.
+- `rabbitmq` — внутренний брокер сообщений; Management UI открыт на внешнем порту `15672`.
 
 ## Межсервисное взаимодействие через RabbitMQ
 
@@ -83,6 +83,8 @@ docker compose up --build
 http://localhost:8080/api/v1
 ```
 
+При запуске через Docker Compose наружу опубликованы только `api-gateway` (`8080`) и RabbitMQ Management UI (`15672`). Остальные сервисы доступны только внутри docker-сети по именам `auth-service`, `recipe-service`, `social-service`.
+
 Остановить сервисы:
 
 ```powershell
@@ -99,21 +101,6 @@ docker compose up --build -d
 
 ```powershell
 docker compose logs -f
-```
-
-Если Docker не может скачать образы с Docker Hub из-за ошибки вида `lookup auth.docker.io: no such host`, используй офлайн-сборку через локальный Go:
-
-```powershell
-.\build-linux.ps1
-docker compose -f docker-compose.offline.yml up --build
-```
-
-Этот вариант собирает Linux-бинарники локально и кладёт их в контейнеры `FROM scratch`, поэтому не требует скачивания `golang` или `alpine`. Образ `rabbitmq:3-management-alpine` всё равно нужен для брокера сообщений.
-
-Остановить офлайн-вариант:
-
-```powershell
-docker compose -f docker-compose.offline.yml down
 ```
 
 ## Быстрая проверка

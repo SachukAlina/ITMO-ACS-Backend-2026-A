@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
 	"recipe-lab3/internal/common"
 )
 
@@ -33,118 +35,113 @@ func main() {
 	s.seed()
 	go s.consumeRecipeEvents()
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/recipes", s.recipesHandler)
-	mux.HandleFunc("/api/v1/recipes/", s.recipeByIDHandler)
-	mux.HandleFunc("/api/v1/users/me/recipes", s.myRecipesHandler)
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		common.JSON(w, http.StatusOK, map[string]string{"service": "recipe-service", "status": "ok"})
-	})
+	router := common.NewRouter()
+	router.GET("/api/v1/recipes", s.listRecipesHandler)
+	router.POST("/api/v1/recipes", s.createRecipeHandler)
+	router.GET("/api/v1/recipes/:recipeID", s.getRecipeHandler)
+	router.PUT("/api/v1/recipes/:recipeID", s.updateRecipeHandler)
+	router.DELETE("/api/v1/recipes/:recipeID", s.deleteRecipeHandler)
+	router.GET("/api/v1/users/me/recipes", s.myRecipesHandler)
+	router.GET("/health", common.Health("recipe-service"))
 
 	log.Println("recipe-service listening on :8082")
-	log.Fatal(http.ListenAndServe(":8082", mux))
+	log.Fatal(router.Run(":8082"))
 }
 
-func (s *store) myRecipesHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		common.Error(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
-		return
-	}
-	userID, ok := requireUserID(w, r)
+func (s *store) myRecipesHandler(c *gin.Context) {
+	userID, ok := requireUserID(c)
 	if !ok {
 		return
 	}
-	s.list(w, r, userID)
+	s.list(c, userID)
 }
 
-func (s *store) recipesHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodGet {
-		s.list(w, r, 0)
-		return
-	}
-	if r.Method != http.MethodPost {
-		common.Error(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
-		return
-	}
-	userID, ok := requireUserID(w, r)
+func (s *store) listRecipesHandler(c *gin.Context) {
+	s.list(c, 0)
+}
+
+func (s *store) createRecipeHandler(c *gin.Context) {
+	userID, ok := requireUserID(c)
 	if !ok {
 		return
 	}
 	var req common.CreateRecipeRequest
-	if err := common.Decode(r, &req); err != nil {
-		common.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid JSON body")
+	if err := common.Decode(c, &req); err != nil {
+		common.Error(c, http.StatusBadRequest, "BAD_REQUEST", "invalid JSON body")
 		return
 	}
 	if !validRecipe(req) {
-		common.Error(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid recipe data")
+		common.Error(c, http.StatusBadRequest, "VALIDATION_ERROR", "invalid recipe data")
 		return
 	}
 	recipe := s.create(userID, req)
-	common.JSON(w, http.StatusCreated, recipe)
+	common.JSON(c, http.StatusCreated, recipe)
 }
 
-func (s *store) recipeByIDHandler(w http.ResponseWriter, r *http.Request) {
-	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/recipes/"), "/"), "/")
-	if len(parts) != 1 {
-		common.Error(w, http.StatusNotFound, "NOT_FOUND", "route not found")
-		return
-	}
-	recipeID, ok := parseID(w, parts[0])
+func (s *store) getRecipeHandler(c *gin.Context) {
+	recipeID, ok := parseID(c, c.Param("recipeID"))
 	if !ok {
 		return
 	}
-	if r.Method == http.MethodGet {
-		recipe, exists := s.get(recipeID)
-		if !exists {
-			common.Error(w, http.StatusNotFound, "NOT_FOUND", "recipe not found")
-			return
-		}
-		common.JSON(w, http.StatusOK, recipe)
+	recipe, exists := s.get(recipeID)
+	if !exists {
+		common.Error(c, http.StatusNotFound, "NOT_FOUND", "recipe not found")
 		return
 	}
-	userID, ok := requireUserID(w, r)
+	common.JSON(c, http.StatusOK, recipe)
+}
+
+func (s *store) updateRecipeHandler(c *gin.Context) {
+	recipeID, ok := parseID(c, c.Param("recipeID"))
 	if !ok {
 		return
 	}
-	if r.Method == http.MethodPut {
-		var req common.CreateRecipeRequest
-		if err := common.Decode(r, &req); err != nil {
-			common.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid JSON body")
-			return
-		}
-		recipe, status := s.update(userID, recipeID, req)
-		if status != 0 {
-			writeRecipeStatus(w, status)
-			return
-		}
-		common.JSON(w, http.StatusOK, recipe)
+	userID, ok := requireUserID(c)
+	if !ok {
 		return
 	}
-	if r.Method == http.MethodDelete {
-		status := s.delete(userID, recipeID)
-		if status != 0 {
-			writeRecipeStatus(w, status)
-			return
-		}
-		common.Empty(w, http.StatusNoContent)
+	var req common.CreateRecipeRequest
+	if err := common.Decode(c, &req); err != nil {
+		common.Error(c, http.StatusBadRequest, "BAD_REQUEST", "invalid JSON body")
 		return
 	}
-	common.Error(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
+	recipe, status := s.update(userID, recipeID, req)
+	if status != 0 {
+		writeRecipeStatus(c, status)
+		return
+	}
+	common.JSON(c, http.StatusOK, recipe)
 }
 
-func (s *store) list(w http.ResponseWriter, r *http.Request, ownerID int) {
-	query := r.URL.Query()
-	page := intQuery(query.Get("page"), 1)
-	pageSize := intQuery(query.Get("page_size"), 20)
+func (s *store) deleteRecipeHandler(c *gin.Context) {
+	recipeID, ok := parseID(c, c.Param("recipeID"))
+	if !ok {
+		return
+	}
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+	status := s.delete(userID, recipeID)
+	if status != 0 {
+		writeRecipeStatus(c, status)
+		return
+	}
+	common.Empty(c, http.StatusNoContent)
+}
+
+func (s *store) list(c *gin.Context, ownerID int) {
+	page := intQuery(c.Query("page"), 1)
+	pageSize := intQuery(c.Query("page_size"), 20)
 	if page < 1 {
 		page = 1
 	}
 	if pageSize < 1 || pageSize > 100 {
 		pageSize = 20
 	}
-	difficulty := query.Get("difficulty")
-	dishType := query.Get("dish_type")
-	ingredients := splitCSV(query.Get("ingredients"))
+	difficulty := c.Query("difficulty")
+	dishType := c.Query("dish_type")
+	ingredients := splitCSV(c.Query("ingredients"))
 
 	s.mu.RLock()
 	items := make([]common.RecipeCard, 0)
@@ -178,7 +175,7 @@ func (s *store) list(w http.ResponseWriter, r *http.Request, ownerID int) {
 	if end > total {
 		end = total
 	}
-	common.JSON(w, http.StatusOK, common.RecipeListResponse{Items: items[start:end], Page: page, PageSize: pageSize, Total: total})
+	common.JSON(c, http.StatusOK, common.RecipeListResponse{Items: items[start:end], Page: page, PageSize: pageSize, Total: total})
 }
 
 func (s *store) create(userID int, req common.CreateRecipeRequest) common.RecipeDetails {
@@ -322,19 +319,19 @@ func (s *store) steps(inputs []common.StepInput) []common.Step {
 	return result
 }
 
-func requireUserID(w http.ResponseWriter, r *http.Request) (int, bool) {
-	userID, err := strconv.Atoi(r.Header.Get("X-User-ID"))
+func requireUserID(c *gin.Context) (int, bool) {
+	userID, err := strconv.Atoi(c.GetHeader("X-User-ID"))
 	if err != nil || userID < 1 {
-		common.Error(w, http.StatusUnauthorized, "UNAUTHORIZED", "gateway user context required")
+		common.Error(c, http.StatusUnauthorized, "UNAUTHORIZED", "gateway user context required")
 		return 0, false
 	}
 	return userID, true
 }
 
-func parseID(w http.ResponseWriter, raw string) (int, bool) {
+func parseID(c *gin.Context, raw string) (int, bool) {
 	id, err := strconv.Atoi(raw)
 	if err != nil || id < 1 {
-		common.Error(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid id")
+		common.Error(c, http.StatusBadRequest, "VALIDATION_ERROR", "invalid id")
 		return 0, false
 	}
 	return id, true
@@ -348,14 +345,14 @@ func validRecipe(req common.CreateRecipeRequest) bool {
 		len(req.Steps) > 0
 }
 
-func writeRecipeStatus(w http.ResponseWriter, status int) {
+func writeRecipeStatus(c *gin.Context, status int) {
 	switch status {
 	case http.StatusBadRequest:
-		common.Error(w, status, "VALIDATION_ERROR", "invalid recipe data")
+		common.Error(c, status, "VALIDATION_ERROR", "invalid recipe data")
 	case http.StatusForbidden:
-		common.Error(w, status, "FORBIDDEN", "access denied")
+		common.Error(c, status, "FORBIDDEN", "access denied")
 	default:
-		common.Error(w, status, "NOT_FOUND", "recipe not found")
+		common.Error(c, status, "NOT_FOUND", "recipe not found")
 	}
 }
 

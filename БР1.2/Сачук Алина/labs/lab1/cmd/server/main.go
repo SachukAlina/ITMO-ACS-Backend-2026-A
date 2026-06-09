@@ -2,7 +2,6 @@ package main
 
 import (
 	"log"
-	"net/http"
 	"os"
 
 	"recipe-lab1/internal/controller"
@@ -19,7 +18,7 @@ func main() {
 	router := controller.NewRouter(appStore)
 
 	log.Printf("Recipe Sharing API is listening on http://localhost%s/api/v1", address)
-	if err := http.ListenAndServe(address, router); err != nil {
+	if err := router.Run(address); err != nil {
 		log.Fatal(err)
 	}
 }

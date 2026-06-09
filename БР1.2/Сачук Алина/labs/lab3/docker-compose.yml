@@ -3,7 +3,6 @@ services:
     image: rabbitmq:3-management-alpine
     container_name: lab3-rabbitmq
     ports:
-      - "5672:5672"
       - "15672:15672"
     networks:
       - recipe-network
@@ -13,8 +12,8 @@ services:
       context: .
       dockerfile: cmd/auth-service/Dockerfile
     container_name: lab3-auth-service
-    ports:
-      - "8081:8081"
+    expose:
+      - "8081"
     networks:
       - recipe-network
 
@@ -23,8 +22,8 @@ services:
       context: .
       dockerfile: cmd/recipe-service/Dockerfile
     container_name: lab3-recipe-service
-    ports:
-      - "8082:8082"
+    expose:
+      - "8082"
     environment:
       RABBITMQ_API_URL: http://rabbitmq:15672
       RABBITMQ_USER: guest
@@ -40,8 +39,8 @@ services:
       context: .
       dockerfile: cmd/social-service/Dockerfile
     container_name: lab3-social-service
-    ports:
-      - "8083:8083"
+    expose:
+      - "8083"
     environment:
       RABBITMQ_API_URL: http://rabbitmq:15672
       RABBITMQ_USER: guest

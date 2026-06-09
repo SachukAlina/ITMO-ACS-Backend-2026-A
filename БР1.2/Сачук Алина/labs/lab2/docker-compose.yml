@@ -3,7 +3,6 @@ services:
     image: rabbitmq:3-management-alpine
     container_name: lab2-rabbitmq
     ports:
-      - "5672:5672"
       - "15672:15672"
 
   auth-service:
@@ -12,8 +11,8 @@ services:
       args:
         SERVICE: auth-service
     container_name: lab2-auth-service
-    ports:
-      - "8081:8081"
+    expose:
+      - "8081"
 
   recipe-service:
     build:
@@ -21,8 +20,8 @@ services:
       args:
         SERVICE: recipe-service
     container_name: lab2-recipe-service
-    ports:
-      - "8082:8082"
+    expose:
+      - "8082"
     environment:
       RABBITMQ_API_URL: http://rabbitmq:15672
       RABBITMQ_USER: guest
@@ -37,8 +36,8 @@ services:
       args:
         SERVICE: social-service
     container_name: lab2-social-service
-    ports:
-      - "8083:8083"
+    expose:
+      - "8083"
     environment:
       RABBITMQ_API_URL: http://rabbitmq:15672
       RABBITMQ_USER: guest

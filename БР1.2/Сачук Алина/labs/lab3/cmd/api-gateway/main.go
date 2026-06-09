@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
 	"recipe-lab3/internal/common"
 )
 
@@ -26,42 +28,36 @@ type gateway struct {
 
 func main() {
 	gw := gateway{client: &http.Client{Timeout: 5 * time.Second}}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/", gw.route)
-	mux.HandleFunc("/health", gw.health)
+	router := common.NewRouter()
+	router.Use(common.CORS())
+	router.Any("/api/v1", gw.route)
+	router.Any("/api/v1/*path", gw.route)
+	router.GET("/health", gw.health)
 
 	log.Println("api-gateway listening on :8080")
-	log.Fatal(http.ListenAndServe(":8080", mux))
+	log.Fatal(router.Run(":8080"))
 }
 
-func (gw gateway) route(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-	if r.Method == http.MethodOptions {
-		common.Empty(w, http.StatusNoContent)
-		return
-	}
-
-	target := gw.targetService(r)
+func (gw gateway) route(c *gin.Context) {
+	target := gw.targetService(c)
 	if target == "" {
-		common.Error(w, http.StatusNotFound, "NOT_FOUND", "route not found")
+		common.Error(c, http.StatusNotFound, "NOT_FOUND", "route not found")
 		return
 	}
 
 	userID := ""
-	if gw.requiresAuth(r) {
-		user, ok := gw.validateToken(w, r)
+	if gw.requiresAuth(c) {
+		user, ok := gw.validateToken(c)
 		if !ok {
 			return
 		}
-		userID = intToString(user.ID)
+		userID = strconv.Itoa(user.ID)
 	}
 
-	gw.proxy(w, r, target, userID)
+	gw.proxy(c, target, userID)
 }
 
-func (gw gateway) health(w http.ResponseWriter, r *http.Request) {
+func (gw gateway) health(c *gin.Context) {
 	statuses := map[string]string{"api-gateway": "ok"}
 	for name, address := range map[string]string{
 		"auth-service":   authService + "/health",
@@ -80,15 +76,15 @@ func (gw gateway) health(w http.ResponseWriter, r *http.Request) {
 			statuses[name] = "unhealthy"
 		}
 	}
-	common.JSON(w, http.StatusOK, statuses)
+	common.JSON(c, http.StatusOK, statuses)
 }
 
-func (gw gateway) targetService(r *http.Request) string {
-	path := r.URL.Path
+func (gw gateway) targetService(c *gin.Context) string {
+	path := c.Request.URL.Path
 	if strings.HasPrefix(path, "/api/v1/auth/") || path == "/api/v1/users/me" {
 		return authService
 	}
-	if path == "/api/v1/recipes" || strings.HasPrefix(path, "/api/v1/users/me/recipes") {
+	if path == "/api/v1/recipes" || path == "/api/v1/users/me/recipes" {
 		return recipeService
 	}
 	if strings.HasPrefix(path, "/api/v1/recipes/") {
@@ -98,65 +94,67 @@ func (gw gateway) targetService(r *http.Request) string {
 		return recipeService
 	}
 	if strings.HasPrefix(path, "/api/v1/comments/") ||
-		strings.HasPrefix(path, "/api/v1/users/me/saved-recipes") ||
+		path == "/api/v1/users/me/saved-recipes" ||
 		isUserSocialPath(path) {
 		return socialService
 	}
 	return ""
 }
 
-func (gw gateway) requiresAuth(r *http.Request) bool {
-	path := r.URL.Path
+func (gw gateway) requiresAuth(c *gin.Context) bool {
+	path := c.Request.URL.Path
+	method := c.Request.Method
 	if strings.HasPrefix(path, "/api/v1/auth/") {
 		return false
 	}
-	if path == "/api/v1/recipes" && r.Method == http.MethodGet {
+	if path == "/api/v1/recipes" && method == http.MethodGet {
 		return false
 	}
-	if strings.HasPrefix(path, "/api/v1/recipes/") && r.Method == http.MethodGet {
+	if strings.HasPrefix(path, "/api/v1/recipes/") && method == http.MethodGet {
 		return false
 	}
-	if isUserSocialPath(path) && r.Method == http.MethodGet {
+	if isUserSocialPath(path) && method == http.MethodGet {
 		return false
 	}
 	return true
 }
 
-func (gw gateway) validateToken(w http.ResponseWriter, r *http.Request) (common.User, bool) {
+func (gw gateway) validateToken(c *gin.Context) (common.User, bool) {
 	req, err := http.NewRequest(http.MethodGet, authService+"/internal/auth/validate", nil)
 	if err != nil {
-		common.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "cannot create auth request")
+		common.Error(c, http.StatusInternalServerError, "INTERNAL_ERROR", "cannot create auth request")
 		return common.User{}, false
 	}
-	req.Header.Set("Authorization", r.Header.Get("Authorization"))
+	req.Header.Set("Authorization", c.GetHeader("Authorization"))
 	resp, err := gw.client.Do(req)
 	if err != nil {
-		common.Error(w, http.StatusBadGateway, "BAD_GATEWAY", "auth-service unavailable")
+		common.Error(c, http.StatusBadGateway, "BAD_GATEWAY", "auth-service unavailable")
 		return common.User{}, false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		w.WriteHeader(resp.StatusCode)
-		_, _ = io.Copy(w, resp.Body)
+		c.Status(resp.StatusCode)
+		_, _ = io.Copy(c.Writer, resp.Body)
 		return common.User{}, false
 	}
 	var user common.User
 	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
-		common.Error(w, http.StatusBadGateway, "BAD_GATEWAY", "invalid auth-service response")
+		common.Error(c, http.StatusBadGateway, "BAD_GATEWAY", "invalid auth-service response")
 		return common.User{}, false
 	}
 	return user, true
 }
 
-func (gw gateway) proxy(w http.ResponseWriter, r *http.Request, target string, userID string) {
+func (gw gateway) proxy(c *gin.Context, target string, userID string) {
+	r := c.Request
 	targetURL, err := url.Parse(target + r.URL.RequestURI())
 	if err != nil {
-		common.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "invalid target URL")
+		common.Error(c, http.StatusInternalServerError, "INTERNAL_ERROR", "invalid target URL")
 		return
 	}
 	req, err := http.NewRequest(r.Method, targetURL.String(), r.Body)
 	if err != nil {
-		common.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "cannot create proxy request")
+		common.Error(c, http.StatusInternalServerError, "INTERNAL_ERROR", "cannot create proxy request")
 		return
 	}
 	req.Header = r.Header.Clone()
@@ -166,27 +164,29 @@ func (gw gateway) proxy(w http.ResponseWriter, r *http.Request, target string, u
 
 	resp, err := gw.client.Do(req)
 	if err != nil {
-		common.Error(w, http.StatusBadGateway, "BAD_GATEWAY", "target service unavailable")
+		common.Error(c, http.StatusBadGateway, "BAD_GATEWAY", "target service unavailable")
 		return
 	}
 	defer resp.Body.Close()
 	for key, values := range resp.Header {
 		for _, value := range values {
-			w.Header().Add(key, value)
+			c.Writer.Header().Add(key, value)
 		}
 	}
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	c.Status(resp.StatusCode)
+	_, _ = io.Copy(c.Writer, resp.Body)
 }
 
 func isUserSocialPath(path string) bool {
-	return strings.Contains(path, "/followers") ||
-		strings.Contains(path, "/following") ||
-		strings.HasSuffix(path, "/follow")
-}
-
-func intToString(value int) string {
-	return strconv.Itoa(value)
+	const prefix = "/api/v1/users/"
+	if !strings.HasPrefix(path, prefix) {
+		return false
+	}
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(path, prefix), "/"), "/")
+	if len(parts) != 2 {
+		return false
+	}
+	return parts[1] == "followers" || parts[1] == "following" || parts[1] == "follow"
 }
 
 func envURL(name string, fallback string) string {

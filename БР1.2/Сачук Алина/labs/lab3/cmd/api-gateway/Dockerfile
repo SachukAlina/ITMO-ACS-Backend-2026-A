@@ -1,7 +1,7 @@
-FROM golang:1.22-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
-COPY go.mod ./
+COPY go.mod go.sum ./
 COPY internal ./internal
 COPY cmd/api-gateway ./cmd/api-gateway
 RUN go build -o /service ./cmd/api-gateway

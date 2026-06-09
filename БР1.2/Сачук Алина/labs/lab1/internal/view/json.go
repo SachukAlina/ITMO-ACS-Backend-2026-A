@@ -1,26 +1,25 @@
 package view
 
 import (
-	"encoding/json"
-	"net/http"
+	"github.com/gin-gonic/gin"
 
 	"recipe-lab1/internal/model"
 )
 
-func JSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
+func JSON(c *gin.Context, status int, payload any) {
 	if payload != nil {
-		_ = json.NewEncoder(w).Encode(payload)
+		c.JSON(status, payload)
+		return
 	}
+	c.Status(status)
 }
 
-func Empty(w http.ResponseWriter, status int) {
-	w.WriteHeader(status)
+func Empty(c *gin.Context, status int) {
+	c.Status(status)
 }
 
-func Error(w http.ResponseWriter, status int, code string, message string, details ...model.ErrorDetail) {
-	JSON(w, status, model.ErrorResponse{
+func Error(c *gin.Context, status int, code string, message string, details ...model.ErrorDetail) {
+	JSON(c, status, model.ErrorResponse{
 		Error: model.ErrorBody{
 			Code:    code,
 			Message: message,
